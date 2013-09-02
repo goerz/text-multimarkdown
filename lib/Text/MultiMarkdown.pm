@@ -1384,10 +1384,8 @@ sub _MathJaxFormulas {
         $tex_escaped =~ s/>/&gt;/g;
         $tex_escaped =~ s/</&lt;/g;
         my $preview = qq{<div class="MathJax_Preview"><pre>$tex_escaped</pre></div>};
-        my $script = qq{<script type="math/tex"; mode=display>\n}
-                     .qq{\n//<![CDATA[\n}
-                     .$tex_formula
-                     .qq{//]]></script>};
+        my $script = qq{<script type="math/tex; mode=display">}
+                     .$tex_formula.qq{</script>};
         # We wrap the hash in div tags to prevent it from being processed into
         # a paragraph by Markdown
         $result = "<div>"._md5_utf8($tex_formula)."</div>";
