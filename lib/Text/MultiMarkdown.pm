@@ -60,6 +60,9 @@ This module implements the MultiMarkdown markdown syntax extensions from:
 
     http://fletcherpenney.net/multimarkdown/
 
+Additionally, it recognized mathematical formulas in LaTeX syntax and translates
+them to MathJax HTML code.
+
 =head1 SYNTAX
 
 For more information about (original) Markdown's syntax, see:
@@ -75,6 +78,14 @@ The extension is documented at:
 and borrows from php-markdown, which lives at:
 
     http://michelf.com/projects/php-markdown/extra/
+
+Furthermore mathematical formulas are handled explicitly.  Inline formulas are
+indicated by dollar signs, e.g.  $x^2$. The formula must be on a single line,
+and the initial and final dollar sign must not be followed and preceded by a
+whitespace. Display formulas should appear as an independent paragraph ("at a
+block level") and are indicated with the symbols \[ and \] at the beginning and
+end of the formula.
+
 
 This documentation is going to be moved/copied into this module for clearer reading in a future release..
 
@@ -134,6 +145,10 @@ If true, this disables the MultiMarkdown bibliography/citation handling.
 =item disable_definition_lists
 
 If true, this disables the MultiMarkdown definition list handling.
+
+=item disable_mathjax
+
+If true, this disables the handling of mathematical formulas.
 
 =back
 
@@ -273,6 +288,7 @@ sub _CleanUpRunData {
     $self->{_crossrefs}   = {};
     $self->{_footnotes}   = {};
     $self->{_references}  = {};
+    $self->{_math_blocks} = {};
     $self->{_used_footnotes}  = []; # Why do we need 2 data structures for footnotes? FIXME
     $self->{_used_references} = []; # Ditto for references
     $self->{_citation_counter} = 0;
@@ -300,12 +316,18 @@ sub _Markdown {
     # Turn block-level HTML blocks into hash entries
     $text = $self->_HashHTMLBlocks($text, {interpret_markdown_on_attribute => 1});
 
+    # MathJax Extension (part 1)
+    $text = $self->_MathJaxFormulas($text) unless $self->{disable_mathjax};
+
     $text = $self->_StripLinkDefinitions($text);
 
     # MMD only
     $text = $self->_StripMarkdownReferences($text);
 
     $text = $self->_RunBlockGamut($text, {wrap_in_p_tags => 1});
+
+    # MathJax Extension (part2)
+    $text = $self->_InsertMathJax($text) unless $self->{disable_mathjax};
 
     # MMD Only
     $text = $self->_DoMarkdownCitations($text) unless $self->{disable_bibliography};
@@ -1300,6 +1322,95 @@ sub _PrintMarkdownBibliography {
     }
 
     return $result;
+}
+
+sub _md5_utf8 {
+    # Internal function used to safely MD5sum chunks of the input, which might be Unicode in Perl's internal representation.
+    my $input = shift;
+    return unless defined $input;
+    if (Encode::is_utf8 $input) {
+        return md5_hex(Encode::encode('utf8', $input));
+    }
+    else {
+        return md5_hex($input);
+    }
+}
+
+sub _MathJaxFormulas {
+    # In order to protect mathematical Formulas from further interference from
+    # Markdown, we replace the formula by its MD5 hash. The html-code that
+    # should ultimately represent the formula is stored in the
+    # $self->{_math_blocks} dictionary, for later processing by the
+    # _InstertMathJax method.
+    my ($self, $text) = @_;
+
+    return '' unless length $text;
+
+    # Within one line, inline math is denoted with dollar signs, e.g. $x^2$. The
+    # opening dollar sign must be followed, the closing one must follow a
+    # non-whitespace.
+    $text =~ s{
+        \$(           # Formula starts with a dollar sign
+        \S            # which must be followed by a non-whitespace
+        [^\$\n]*?   # Formula must be on one line
+        \S            # The final dollar sign must come after a non-whitespace
+        |             # white-space
+        \w)           # Of course, a single letter is also a valid formula
+        \$            # Closing dollar sign
+    }{
+        my $result = '';
+        my $tex_formula = $1;
+        my $tex_escaped = $tex_formula;
+        $tex_escaped =~ s/&/&quot;/g;
+        $tex_escaped =~ s/>/&gt;/g;
+        $tex_escaped =~ s/</&lt;/g;
+        my $preview = qq{<span class="MathJax_Preview"><code>$tex_escaped</code></span>};
+        my $script = qq{<script type="math/tex">$tex_formula</script>};
+        $result = _md5_utf8($tex_formula);
+        $self->{_math_blocks}->{$result} = $preview.$script;
+        $result;
+    }xsge;
+
+    # Display equations should be denoted by \[ and \]
+    $text =~ s{
+        \\\[(         # Formula starts with a \[
+        .*?
+        )\\\]         # Closing marker \]
+    }{
+        my $result = '';
+        my $tex_formula = $1;
+        my $tex_escaped = $tex_formula;
+        $tex_escaped =~ s/&/&quot;/g;
+        $tex_escaped =~ s/>/&gt;/g;
+        $tex_escaped =~ s/</&lt;/g;
+        my $preview = qq{<div class="MathJax_Preview"><pre>$tex_escaped</pre></div>};
+        my $script = qq{<script type="math/tex"; mode=display>\n}
+                     .qq{\n//<![CDATA[\n}
+                     .$tex_formula
+                     .qq{//]]></script>};
+        # We wrap the hash in div tags to prevent it from being processed into
+        # a paragraph by Markdown
+        $result = "<div>"._md5_utf8($tex_formula)."</div>";
+        $self->{_math_blocks}->{$result} = $preview."\n".$script;
+        $result;
+    }xsge;
+
+    return $text;
+}
+
+sub _InsertMathJax {
+    # Put in the MathJax HTML code stored in the _math_blocks hash for all
+    # placeholders that were marked by the _MathJaxFormulas method.
+    my ($self, $text) = @_;
+
+    return '' unless length $text;
+
+    my $hash;
+    foreach $hash (keys(%{$self->{_math_blocks}})){
+        my $replacement = $self->{_math_blocks}->{$hash};
+        $text =~ s/$hash/$replacement/g;
+    }
+    return $text;
 }
 
 1;
